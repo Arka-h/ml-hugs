@@ -110,7 +110,7 @@ class HUGS_TRIMLP:
             self.smpl_template = subdivide_smpl_model(smoothing=True, n_iter=n_subdivision).to(self.device)
         else:
             self.smpl_template = SMPL(SMPL_PATH).to(self.device)
-            
+        
         self.smpl = SMPL(SMPL_PATH).to(self.device)
             
         edges = trimesh.Trimesh(

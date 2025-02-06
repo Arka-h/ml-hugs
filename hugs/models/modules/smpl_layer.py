@@ -44,7 +44,7 @@ TensorOutput = namedtuple('TensorOutput',
 class SMPLOutput(ModelOutput):
     betas: Optional[Tensor] = None
     body_pose: Optional[Tensor] = None
-    T: Optional[Tensor] = None
+    T: Optional[Tensor] = None # DELTA: These are all extra variables
     A: Optional[Tensor] = None
     shape_offsets: Optional[Tensor] = None
     pose_offsets: Optional[Tensor] = None
@@ -219,7 +219,8 @@ class SMPL(nn.Module):
                 else:
                     default_global_orient = torch.tensor(
                         global_orient, dtype=dtype)
-                    
+            # global_orient = nn.Parameter(default_global_orient,
+            #                              requires_grad=True)
             self.register_buffer('global_orient', default_global_orient)
 
         if create_body_pose:
@@ -232,7 +233,7 @@ class SMPL(nn.Module):
                 else:
                     default_body_pose = torch.tensor(body_pose,
                                                      dtype=dtype)
-            self.register_buffer(
+            self.register_buffer( # Using register_buffer instead of register_parameter
                 'body_pose', default_body_pose)
                 # nn.Parameter(default_body_pose, requires_grad=True))
 
@@ -243,8 +244,9 @@ class SMPL(nn.Module):
                                              requires_grad=True)
             else:
                 default_transl = torch.tensor(transl, dtype=dtype)
-            self.register_buffer(
+            self.register_buffer( # Using register_buffer instead of register_parameter
                 'transl', default_transl)
+            # 'transl', nn.Parameter(default_transl, requires_grad=True))
 
         if v_template is None:
             v_template = data_struct.v_template
@@ -316,7 +318,7 @@ class SMPL(nn.Module):
         v_shaped = self.v_template + blend_shapes(betas, self.shapedirs)
         return SMPLOutput(vertices=v_shaped, betas=betas, v_shaped=v_shaped)
 
-    def forward_pose(
+    def forward_pose( # DELTA: Extra function, --> Not found in smplx original code
         self,
         betas: Optional[Tensor] = None,
         body_pose: Optional[Tensor] = None,
@@ -369,7 +371,7 @@ class SMPL(nn.Module):
             v_posed=v_posed,
             v_shaped=v_shaped)
         
-    def forward_extra(
+    def forward_extra( # DELTA: Extra function, --> Not found in smplx original code
         self,
         betas: Optional[Tensor] = None,
         body_pose: Optional[Tensor] = None,
@@ -408,7 +410,7 @@ class SMPL(nn.Module):
 
         return output
     
-    def forward(
+    def forward( # DELTA: Has extra arguments: v_template, posedirs, shapedirs, lbs_weights, J_regressor, disable_posedirs
         self,
         betas: Optional[Tensor] = None,
         body_pose: Optional[Tensor] = None,
@@ -477,6 +479,7 @@ class SMPL(nn.Module):
             num_repeats = int(batch_size / betas.shape[0])
             betas = betas.expand(num_repeats, -1)
 
+        # DELTA: lbs() returns more than just vertices, joints
         vertices, joints, A, T, v_posed, v_shaped, shape_offsets, pose_offsets = lbs(
             betas, 
             full_pose, 
@@ -487,7 +490,7 @@ class SMPL(nn.Module):
             self.parents,
             self.lbs_weights if lbs_weights is None else lbs_weights, 
             pose2rot=pose2rot,
-            disable_posedirs=disable_posedirs,
+            disable_posedirs=disable_posedirs, # DELTA: Extra
         )
 
         joints = self.vertex_joint_selector(vertices, joints)
@@ -498,6 +501,7 @@ class SMPL(nn.Module):
         if apply_trans:
             joints += transl.unsqueeze(dim=1)
             vertices += transl.unsqueeze(dim=1)
+            # DELTA: Extra calculation
             A = A.clone()
             A[..., :3, 3] += transl.unsqueeze(dim=1)
             T = T.clone()
@@ -509,7 +513,7 @@ class SMPL(nn.Module):
                             joints=joints,
                             betas=betas,
                             full_pose=full_pose if return_full_pose else None,
-                            A=A,
+                            A=A, # DELTA: All parameters from here are extra
                             T=T,
                             shape_offsets=shape_offsets,
                             pose_offsets=pose_offsets,
@@ -597,7 +601,13 @@ class SMPLLayer(SMPL):
                                 dtype=dtype, device=device)
         if transl is None:
             transl = torch.zeros([batch_size, 3], dtype=dtype, device=device)
-        
+        """ DELTA: It was the below code instead of the section 0 [denoted by Start/End]
+        full_pose = torch.cat(
+            [global_orient.reshape(-1, 1, 3, 3),
+             body_pose.reshape(-1, self.NUM_BODY_JOINTS, 3, 3)],
+            dim=1)
+        """
+        # >> Start 0
         if body_pose.shape[-1] == 69:
             full_pose_aa = torch.cat([global_orient, body_pose], dim=-1)
             full_pose = batch_rodrigues(full_pose_aa.reshape(-1, 3)).reshape(-1, self.NUM_BODY_JOINTS+1, 3, 3)
@@ -606,6 +616,7 @@ class SMPLLayer(SMPL):
                 [global_orient.reshape(-1, 1, 3, 3),
                 body_pose.reshape(-1, self.NUM_BODY_JOINTS, 3, 3)],
                 dim=1)
+        # << End 0 
         
         vertices, joints, A, T, v_posed, v_shaped, shape_offsets, pose_offsets = lbs(
             betas, full_pose, self.v_template,
