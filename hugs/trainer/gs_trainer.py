@@ -100,7 +100,7 @@ class GaussianTrainer():
                 init_betas = torch.stack([x['betas'] for x in self.val_dataset.cached_data], dim=0)
                 self.human_gs = HUGS_TRIMLP(
                     sh_degree=cfg.human.sh_degree, 
-                    n_subdivision=cfg.human.n_subdivision,  
+                    n_subdivision=cfg.human.n_subdivision,
                     use_surface=cfg.human.use_surface,
                     init_2d=cfg.human.init_2d,
                     rotate_sh=cfg.human.rotate_sh,
@@ -659,6 +659,7 @@ class GaussianTrainer():
                 progress_imgs.append(image)
                 
             else:
+                logger.info("Human rendering here!")
                 render_pkg = render_human_scene(
                     data=data, 
                     human_gs_out=human_gs_out, 
