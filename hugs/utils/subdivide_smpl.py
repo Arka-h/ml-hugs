@@ -10,7 +10,7 @@ from trimesh import grouping
 from trimesh.geometry import faces_to_edges  
 
 
-from hugs.models.modules.smpl_layer import SMPL
+from hugs.models.modules.smpl_layer import MANO
 
 
 def subdivide(
@@ -71,19 +71,19 @@ def subdivide(
     return new_vertices, new_faces, new_attributes   
 
 
-def _subdivide_smpl_model(smpl=None, smoothing=False):     
-    if smpl is None:         
-        smpl = SMPL("data/smpl")     
+def _subdivide_smpl_model(mano=None, smoothing=False):     
+    if mano is None:         
+        mano = MANO("data/mano")     
              
-    n_verts = smpl.v_template.shape[0]     
-    init_posedirs = smpl.posedirs.detach().cpu().numpy()     
-    init_lbs_weights = smpl.lbs_weights.detach().cpu().numpy()     
-    init_shapedirs = smpl.shapedirs.detach().cpu().numpy()     
-    init_v_id = smpl.v_id      
+    n_verts = mano.v_template.shape[0]     
+    init_posedirs = mano.posedirs.detach().cpu().numpy()     
+    init_lbs_weights = mano.lbs_weights.detach().cpu().numpy()     
+    init_shapedirs = mano.shapedirs.detach().cpu().numpy()     
+    init_v_id = mano.v_id      
     init_shapedirs = init_shapedirs.reshape(n_verts, -1)     
-    init_J_regressor = smpl.J_regressor.detach().cpu().numpy().transpose(1, 0)          
-    init_vertices = smpl.v_template.detach().cpu().numpy()     
-    init_faces = smpl.faces      
+    init_J_regressor = mano.J_regressor.detach().cpu().numpy().transpose(1, 0)          
+    init_vertices = mano.v_template.detach().cpu().numpy()     
+    init_faces = mano.faces      
     print("# vertices before subdivision:", init_vertices.shape)          
     sub_vertices, sub_faces, attr = subdivide(
         vertices=init_vertices,         
@@ -107,12 +107,12 @@ def _subdivide_smpl_model(smpl=None, smoothing=False):
         )        
         sub_vertices = sub_mesh.vertices
                        
-    new_smpl = SMPL("data/smpl")     
+    new_smpl = MANO("data/mano")     
     new_smpl.lbs_weights = torch.from_numpy(attr["lbs_weights"]).float()
     posedirs = np.zeros((207, sub_vertices.shape[0] * 3)).astype(np.float32)
     shapedirs = attr["shapedirs"].reshape(-1, 3, 10)
     J_regressor = np.zeros_like(attr["J_regressor"].transpose(1, 0))
-    J_regressor[:, :n_verts] = smpl.J_regressor
+    J_regressor[:, :n_verts] = mano.J_regressor
     new_smpl.posedirs = torch.from_numpy(posedirs).float()
     new_smpl.shapedirs = torch.from_numpy(shapedirs).float()
     new_smpl.v_template = torch.from_numpy(sub_vertices).float()
@@ -123,12 +123,12 @@ def _subdivide_smpl_model(smpl=None, smoothing=False):
     return new_smpl    
 
 
-def subdivide_smpl_model(smpl=None, smoothing=False, n_iter=1):     
-    if smpl is None:         
-        from hugs.cfg.constants import SMPL_PATH         
-        smpl = SMPL(SMPL_PATH)          
+def subdivide_smpl_model(mano=None, smoothing=False, n_iter=1):     
+    if mano is None:         
+        from hugs.cfg.constants import MANO_PATH         
+        mano = MANO(MANO_PATH)          
     
-    smpl.v_id = np.arange(6890)[..., None]     
+    mano.v_id = np.arange(6890)[..., None]     
     for _ in range(n_iter):         
-        smpl = _subdivide_smpl_model(smpl, smoothing)     
-    return smpl
+        mano = _subdivide_smpl_model(mano, smoothing)     
+    return mano

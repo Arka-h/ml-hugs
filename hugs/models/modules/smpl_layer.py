@@ -743,7 +743,7 @@ class MANO(SMPL):
         if vertex_ids is None:
             vertex_ids = VERTEX_IDS['smplh']
 
-        super(MANO, self).__init__(
+        super().__init__(
             model_path=model_path, data_struct=data_struct,
             batch_size=batch_size, vertex_ids=vertex_ids,
             use_compressed=use_compressed, dtype=dtype, ext=ext, **kwargs)
@@ -813,7 +813,7 @@ class MANO(SMPL):
         msg.append(f'Flat hand mean: {self.flat_hand_mean}')
         return '\n'.join(msg)
 
-    def forward(
+    def forward( # ADDED: Extra arguments as in SMPL.forward
         self,
         betas: Optional[Tensor] = None,
         global_orient: Optional[Tensor] = None,
@@ -821,6 +821,13 @@ class MANO(SMPL):
         transl: Optional[Tensor] = None,
         return_verts: bool = True,
         return_full_pose: bool = False,
+        pose2rot: bool = True,
+        v_template: Optional[Tensor] = None,
+        posedirs: Optional[Tensor] = None,
+        shapedirs: Optional[Tensor] = None,
+        lbs_weights: Optional[Tensor] = None,
+        J_regressor: Optional[Tensor] = None,
+        disable_posedirs: bool = False,
         **kwargs
     ) -> MANOOutput:
         ''' Forward pass for the MANO model
@@ -829,13 +836,11 @@ class MANO(SMPL):
         # ones from the module
         global_orient = (global_orient if global_orient is not None else
                          self.global_orient)
+        hand_pose = hand_pose if hand_pose is not None else self.hand_pose
         betas = betas if betas is not None else self.betas
-        hand_pose = (hand_pose if hand_pose is not None else
-                     self.hand_pose)
 
         apply_trans = transl is not None or hasattr(self, 'transl')
-        if transl is None:
-            if hasattr(self, 'transl'):
+        if transl is None and hasattr(self, 'transl'):
                 transl = self.transl
 
         if self.use_pca:
@@ -844,29 +849,55 @@ class MANO(SMPL):
 
         full_pose = torch.cat([global_orient, hand_pose], dim=1)
         full_pose += self.pose_mean
+        
+        # ADDED: Extra lines to process bs & betas before passing to lbs
+        batch_size = max(betas.shape[0], global_orient.shape[0],
+                         hand_pose.shape[0])
 
-        vertices, joints = lbs(betas, full_pose, self.v_template,
-                               self.shapedirs, self.posedirs,
-                               self.J_regressor, self.parents,
-                               self.lbs_weights, pose2rot=True,
-                               )
+        if betas.shape[0] != batch_size:
+            num_repeats = int(batch_size / betas.shape[0])
+            betas = betas.expand(num_repeats, -1)
+
+        vertices, joints, A, T, v_posed, v_shaped, shape_offsets, pose_offsets= lbs(
+            betas, 
+            full_pose, 
+            self.v_template if v_template is None else v_template,
+            self.shapedirs if shapedirs is None else shapedirs, 
+            self.posedirs if posedirs is None else posedirs,
+            self.J_regressor if J_regressor is None else J_regressor, 
+            self.parents,
+            self.lbs_weights if lbs_weights is None else lbs_weights, 
+            pose2rot=pose2rot,
+            disable_posedirs=disable_posedirs
+        )
 
         # # Add pre-selected extra joints that might be needed
-        # joints = self.vertex_joint_selector(vertices, joints)
+        joints = self.vertex_joint_selector(vertices, joints)
 
         if self.joint_mapper is not None:
             joints = self.joint_mapper(joints)
 
         if apply_trans:
-            joints = joints + transl.unsqueeze(dim=1)
-            vertices = vertices + transl.unsqueeze(dim=1)
-
+            joints += transl.unsqueeze(dim=1)
+            vertices += transl.unsqueeze(dim=1)
+            # ADDED: Extra calculation
+            A = A.clone()
+            A[..., :3, 3] += transl.unsqueeze(dim=1)
+            T = T.clone()
+            T[..., :3, 3] += transl.unsqueeze(dim=1)
+            
         output = MANOOutput(vertices=vertices if return_verts else None,
-                            joints=joints if return_verts else None,
-                            betas=betas,
                             global_orient=global_orient,
                             hand_pose=hand_pose,
-                            full_pose=full_pose if return_full_pose else None)
+                            joints=joints,
+                            betas=betas,
+                            full_pose=full_pose if return_full_pose else None
+                            A=A,
+                            T=T,
+                            shape_offsets=shape_offsets
+                            pose_offsets=pose_offsets
+                            v_posed=v_posed
+                            v_shaped=v_shaped)
 
         return output
 
@@ -876,49 +907,75 @@ class MANOLayer(MANO):
         ''' MANO as a layer model constructor
         '''
         super(MANOLayer, self).__init__(
-            create_global_orient=False,
             create_hand_pose=False,
             create_betas=False,
+            create_global_orient=False,
             create_transl=False,
             *args, **kwargs)
-
-    def name(self) -> str:
-        return 'MANO'
 
     def forward(
         self,
         betas: Optional[Tensor] = None,
-        global_orient: Optional[Tensor] = None,
         hand_pose: Optional[Tensor] = None,
+        global_orient: Optional[Tensor] = None,
         transl: Optional[Tensor] = None,
         return_verts: bool = True,
         return_full_pose: bool = False,
+        pose2rot: bool = True,
+        vert_offsets: Optional[Tensor] = None,
+        disable_posedirs: bool = False,
         **kwargs
     ) -> MANOOutput:
         ''' Forward pass for the MANO model
         '''
+        model_vars = [betas, global_orient, hand_pose, transl]
+        batch_size = 1
+        for var in model_vars:
+            if var is None:
+                continue
+            batch_size = max(batch_size, len(var))
         device, dtype = self.shapedirs.device, self.shapedirs.dtype
         if global_orient is None:
             batch_size = 1
             global_orient = torch.eye(3, device=device, dtype=dtype).view(
                 1, 1, 3, 3).expand(batch_size, -1, -1, -1).contiguous()
-        else:
-            batch_size = global_orient.shape[0]
         if hand_pose is None:
             hand_pose = torch.eye(3, device=device, dtype=dtype).view(
-                1, 1, 3, 3).expand(batch_size, 15, -1, -1).contiguous()
+                1, 1, 3, 3).expand(batch_size, self.NUM_HAND_JOINTS, -1, -1).contiguous()
         if betas is None:
             betas = torch.zeros(
                 [batch_size, self.num_betas], dtype=dtype, device=device)
         if transl is None:
             transl = torch.zeros([batch_size, 3], dtype=dtype, device=device)
 
-        full_pose = torch.cat([global_orient, hand_pose], dim=1)
-        vertices, joints = lbs(betas, full_pose, self.v_template,
-                               self.shapedirs, self.posedirs,
-                               self.J_regressor, self.parents,
-                               self.lbs_weights, pose2rot=False)
-
+        """
+        ADDED: Instead of 
+        full_pose = torch.cat(
+            [global_orient.reshape(-1, 1, 3, 3),
+             body_pose.reshape(-1, self.NUM_HAND_JOINTS, 3, 3)],
+            dim=1)
+        """
+        if hand_pose.shape[-1] == 69:
+            full_pose_aa = torch.cat([global_orient, hand_pose], dim=-1)
+            full_pose = batch_rodrigues(full_pose_aa.reshape(-1, 3)).reshape(-1, self.NUM_HAND_JOINTS+1, 3, 3)
+        else:
+            full_pose = torch.cat(
+                [global_orient.reshape(-1, 1, 3, 3),
+                hand_pose.reshape(-1, self.NUM_HAND_JOINTS, 3, 3)],
+                dim=1)
+        
+        vertices, joints, A, T, v_posed, v_shaped, shape_offsets, pose_offsets = lbs(
+            betas, full_pose, self.v_template,
+            self.shapedirs, self.posedirs,
+            self.J_regressor, self.parents,
+            self.lbs_weights,
+            vert_offsets=vert_offsets,
+            pose2rot=False,
+            disable_posedirs=disable_posedirs,
+            )
+        
+        joints = self.vertex_joint_selector(vertices, joints)
+        
         if self.joint_mapper is not None:
             joints = self.joint_mapper(joints)
 
@@ -928,10 +985,11 @@ class MANOLayer(MANO):
 
         output = MANOOutput(
             vertices=vertices if return_verts else None,
-            joints=joints if return_verts else None,
-            betas=betas,
             global_orient=global_orient,
             hand_pose=hand_pose,
+            joints=joints,
+            betas=betas,
+            v_posed=v_posed,
             full_pose=full_pose if return_full_pose else None)
 
         return output

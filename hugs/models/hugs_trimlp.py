@@ -26,11 +26,11 @@ from hugs.utils.rotations import (
     rotation_6d_to_matrix,
     torch_rotation_matrix_from_vectors,
 )
-from hugs.cfg.constants import SMPL_PATH
+from hugs.cfg.constants import MANO_PATH
 from hugs.utils.subdivide_smpl import subdivide_smpl_model
 
 from .modules.lbs import lbs_extra
-from .modules.smpl_layer import SMPL
+from .modules.smpl_layer import MANO
 from .modules.triplane import TriPlane
 from .modules.decoders import AppearanceDecoder, DeformationDecoder, GeometryDecoder
 
@@ -94,7 +94,7 @@ class HUGS_TRIMLP:
         self.use_deformer = use_deformer
         self.disable_posedirs = disable_posedirs
         
-        self.deformer = 'smpl'
+        self.deformer = 'mano'
         
         if betas is not None:
             self.create_betas(betas, requires_grad=False)
@@ -106,12 +106,12 @@ class HUGS_TRIMLP:
         self.geometry_dec = GeometryDecoder(n_features=n_features*3, use_surface=use_surface).to('cuda')
         
         if n_subdivision > 0:
-            logger.info(f"Subdividing SMPL model {n_subdivision} times")
+            logger.info(f"Subdividing MANO model {n_subdivision} times")
             self.smpl_template = subdivide_smpl_model(smoothing=True, n_iter=n_subdivision).to(self.device)
         else:
-            self.smpl_template = SMPL(SMPL_PATH).to(self.device)
+            self.smpl_template = MANO(MANO_PATH).to(self.device)
         
-        self.smpl = SMPL(SMPL_PATH).to(self.device)
+        self.mano = MANO(MANO_PATH).to(self.device)
             
         edges = trimesh.Trimesh(
             vertices=self.smpl_template.v_template.detach().cpu().numpy(), 
@@ -293,7 +293,7 @@ class HUGS_TRIMLP:
         
         # vitruvian -> t-pose -> posed
         # remove and reapply the blendshape
-        smpl_output = self.smpl(
+        smpl_output = self.mano(
             betas=betas.unsqueeze(0),
             body_pose=body_pose.unsqueeze(0),
             global_orient=global_orient.unsqueeze(0),
@@ -316,7 +316,7 @@ class HUGS_TRIMLP:
                 # gt lbs is needed for lbs regularization loss
                 # predicted lbs should be close to gt lbs
                 _, gt_lbs_weights = smpl_lbsweight_top_k(
-                    lbs_weights=self.smpl.lbs_weights,
+                    lbs_weights=self.mano.lbs_weights,
                     points=gs_xyz.unsqueeze(0),
                     template_points=self.vitruvian_verts.unsqueeze(0),
                 )
@@ -333,7 +333,7 @@ class HUGS_TRIMLP:
             T_vitruvian2pose = T_t2pose @ T_vitruvian2t
 
             _, lbs_T = smpl_lbsmap_top_k(
-                lbs_weights=self.smpl.lbs_weights,
+                lbs_weights=self.mano.lbs_weights,
                 verts_transform=T_vitruvian2pose.unsqueeze(0),
                 points=gs_xyz.unsqueeze(0),
                 template_points=self.vitruvian_verts.unsqueeze(0),
@@ -455,7 +455,7 @@ class HUGS_TRIMLP:
         
         # vitruvian -> t-pose -> posed
         # remove and reapply the blendshape
-        smpl_output = self.smpl(
+        smpl_output = self.mano(
             betas=betas.unsqueeze(0),
             body_pose=body_pose.unsqueeze(0),
             global_orient=global_orient.unsqueeze(0),
@@ -478,7 +478,7 @@ class HUGS_TRIMLP:
                 # gt lbs is needed for lbs regularization loss
                 # predicted lbs should be close to gt lbs
                 _, gt_lbs_weights = smpl_lbsweight_top_k(
-                    lbs_weights=self.smpl.lbs_weights,
+                    lbs_weights=self.mano.lbs_weights,
                     points=gs_xyz.unsqueeze(0),
                     template_points=self.vitruvian_verts.unsqueeze(0),
                 )
@@ -495,7 +495,7 @@ class HUGS_TRIMLP:
             T_vitruvian2pose = T_t2pose @ T_vitruvian2t
 
             _, lbs_T = smpl_lbsmap_top_k(
-                lbs_weights=self.smpl.lbs_weights,
+                lbs_weights=self.mano.lbs_weights,
                 verts_transform=T_vitruvian2pose.unsqueeze(0),
                 points=gs_xyz.unsqueeze(0),
                 template_points=self.vitruvian_verts.unsqueeze(0),
@@ -562,10 +562,10 @@ class HUGS_TRIMLP:
 
     @torch.no_grad()
     def get_vitruvian_verts(self):
-        vitruvian_pose = torch.zeros(69, dtype=self.smpl.dtype, device=self.device)
+        vitruvian_pose = torch.zeros(69, dtype=self.mano.dtype, device=self.device)
         vitruvian_pose[2] = 1.0
         vitruvian_pose[5] = -1.0
-        smpl_output = self.smpl(body_pose=vitruvian_pose[None], betas=self.betas[None], disable_posedirs=False)
+        smpl_output = self.mano(body_pose=vitruvian_pose[None], betas=self.betas[None], disable_posedirs=False)
         vitruvian_verts = smpl_output.vertices[0]
         self.A_t2vitruvian = smpl_output.A[0].detach()
         self.T_t2vitruvian = smpl_output.T[0].detach()
@@ -660,7 +660,7 @@ class HUGS_TRIMLP:
             'lbs_weights': lbs_weights,
             'posedirs': posedirs,
             'deformed_normals': deformed_normals,
-            'faces': self.smpl.faces_tensor,
+            'faces': self.mano.faces_tensor,
             'edges': self.edges,
         }
 
